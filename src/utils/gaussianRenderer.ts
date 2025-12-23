@@ -8,6 +8,8 @@
 import type { GaussianScene, CameraParams, RenderSettings } from '../types';
 
 // Vertex shader for Gaussian splatting
+// NOTE: This is a simplified implementation using gl_PointSize for rendering.
+// A full implementation would use proper 2D covariance projection for elliptical Gaussians.
 const VERTEX_SHADER = `#version 300 es
 precision highp float;
 
@@ -42,13 +44,17 @@ void main() {
   // Transform position to view space
   vec4 viewPos = viewMatrix * vec4(position, 1.0);
   
-  // Skip gaussians behind camera
-  if (viewPos.z > 0.0) {
-    gl_Position = vec4(0.0, 0.0, 2.0, 1.0); // Clip
+  // Skip gaussians behind camera by moving them outside clip volume
+  // We use w=0 trick to effectively discard the point
+  if (viewPos.z > -0.1) {
+    gl_Position = vec4(0.0, 0.0, 0.0, 0.0);
+    gl_PointSize = 0.0;
+    vOpacity = 0.0;
     return;
   }
   
-  // Compute 2D covariance from 3D covariance
+  // Compute 2D covariance from 3D covariance (simplified - produces circular splats)
+  // A full implementation would project the 3D covariance to screen space
   mat3 rotMat = quaternionToMatrix(rotation);
   mat3 scaleMat = mat3(scale.x, 0.0, 0.0, 0.0, scale.y, 0.0, 0.0, 0.0, scale.z);
   mat3 cov3D = rotMat * scaleMat * transpose(scaleMat) * transpose(rotMat);
@@ -62,12 +68,12 @@ void main() {
   float focalLength = projectionMatrix[0][0] * viewport.x * 0.5;
   float screenScale = focalLength / depth;
   
-  // Simplified 2D Gaussian size
+  // Simplified 2D Gaussian size (uses max scale for circular approximation)
   float maxScale = max(max(scale.x, scale.y), scale.z);
   vSize = maxScale * screenScale * 4.0;
   
   gl_Position = clipPos;
-  gl_PointSize = vSize;
+  gl_PointSize = min(vSize, 512.0); // Clamp to avoid GPU issues with large points
   
   vColor = vec4(color, 1.0);
   vOpacity = opacity;

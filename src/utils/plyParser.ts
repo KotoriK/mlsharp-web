@@ -246,11 +246,13 @@ export function parsePLYBuffer(buffer: ArrayBuffer): GaussianScene {
     });
   }
 
-  // Default metadata
+  // Default metadata - these values are reasonable defaults but should be
+  // updated based on the source camera parameters when available.
+  // Standard PLY files don't include camera intrinsics, so we use sensible defaults.
   const metadata: SceneMetadata = {
-    focalLength: 500,
-    imageDimensions: [1024, 1024],
-    colorSpace: 'linearRGB',
+    focalLength: 500,  // Reasonable default for mid-range FOV
+    imageDimensions: [1024, 1024],  // Square aspect ratio
+    colorSpace: 'linearRGB',  // ml-sharp uses linearRGB
   };
 
   return { gaussians, metadata };
@@ -316,8 +318,9 @@ end_header
     dataView.setFloat32(offset + 32, g.rotation[1], true); // y
     dataView.setFloat32(offset + 36, g.rotation[2], true); // z
     
-    // Opacity (logit)
-    const logitOpacity = Math.log(g.opacity / (1 - Math.max(0.001, Math.min(0.999, g.opacity))));
+    // Opacity (logit) - clamp opacity to avoid log(0) or division by zero
+    const clampedOpacity = Math.max(0.001, Math.min(0.999, g.opacity));
+    const logitOpacity = Math.log(clampedOpacity / (1 - clampedOpacity));
     dataView.setFloat32(offset + 40, logitOpacity, true);
     
     // SH DC
