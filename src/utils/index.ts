@@ -1,2 +1,2 @@
 export * from './plyParser';
-export * from './gaussianRenderer';
+export * from './onnxInference';

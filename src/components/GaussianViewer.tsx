@@ -1,179 +1,138 @@
 /**
- * WebGL Gaussian Splatting Viewer Component
+ * 3D Gaussian Splatting Viewer Component
  * 
- * Renders 3D Gaussian Splatting scenes using WebGL
+ * Uses @mkkellogg/gaussian-splats-3d for high-quality Gaussian Splatting rendering
  */
 
-import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
-import type { GaussianScene, CameraParams, RenderSettings } from '../types';
-import { GaussianRenderer } from '../utils/gaussianRenderer';
+import { useRef, useEffect, useState } from 'react';
+import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
 
 interface GaussianViewerProps {
-  scene: GaussianScene | null;
+  /** URL or path to the PLY/splat file to load */
+  splatUrl: string | null;
   width?: number;
   height?: number;
+  /** Called when loading starts */
+  onLoadStart?: () => void;
+  /** Called when loading completes */
+  onLoadComplete?: (gaussianCount: number) => void;
+  /** Called on loading error */
+  onLoadError?: (error: Error) => void;
 }
 
-const DEFAULT_CAMERA: Omit<CameraParams, 'position'> = {
-  target: [0, 0, 0],
-  up: [0, 1, 0],
-  fov: 50,
-  near: 0.1,
-  far: 100,
-};
-
-const DEFAULT_SETTINGS: RenderSettings = {
-  width: 800,
-  height: 600,
-  backgroundColor: [0.1, 0.1, 0.1],
-  sortGaussians: true,
-  enableAntialiasing: true,
-};
-
 export function GaussianViewer({
-  scene,
+  splatUrl,
   width = 800,
   height = 600,
+  onLoadStart,
+  onLoadComplete,
+  onLoadError,
 }: GaussianViewerProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rendererRef = useRef<GaussianRenderer | null>(null);
-  const animationRef = useRef<number>(0);
-  
-  const [isDragging, setIsDragging] = useState(false);
-  const [lastMouse, setLastMouse] = useState({ x: 0, y: 0 });
-  const [orbitAngles, setOrbitAngles] = useState({ theta: 0, phi: Math.PI / 4 });
-  const [zoom, setZoom] = useState(3);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const viewerRef = useRef<GaussianSplats3D.Viewer | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [gaussianCount, setGaussianCount] = useState(0);
 
-  // Compute camera position from orbit angles
-  const camera = useMemo<CameraParams>(() => {
-    const { theta, phi } = orbitAngles;
-    const x = zoom * Math.sin(phi) * Math.cos(theta);
-    const y = zoom * Math.cos(phi);
-    const z = zoom * Math.sin(phi) * Math.sin(theta);
-    
-    return {
-      ...DEFAULT_CAMERA,
-      position: [x, y, z],
-    };
-  }, [orbitAngles, zoom]);
-
-  // Initialize WebGL renderer
+  // Initialize viewer
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!containerRef.current) return;
 
-    const gl = canvas.getContext('webgl2', {
-      antialias: true,
-      alpha: false,
+    // Create the Gaussian Splats viewer
+    const viewer = new GaussianSplats3D.Viewer({
+      cameraUp: [0, 1, 0],
+      initialCameraPosition: [0, 0, 5],
+      initialCameraLookAt: [0, 0, 0],
+      rootElement: containerRef.current,
+      selfDrivenMode: true,
+      useBuiltInControls: true,
+      dynamicScene: false,
+      sceneRevealMode: GaussianSplats3D.SceneRevealMode.Gradual,
+      gpuAcceleratedSort: true,
+      sharedMemoryForWorkers: false,
     });
 
-    if (!gl) {
-      console.error('WebGL2 not supported');
-      return;
-    }
+    viewerRef.current = viewer;
 
-    try {
-      rendererRef.current = new GaussianRenderer(gl);
-    } catch (error) {
-      console.error('Failed to initialize renderer:', error);
-    }
+    // Start the render loop
+    viewer.start();
 
     return () => {
-      if (rendererRef.current) {
-        rendererRef.current.dispose();
-        rendererRef.current = null;
-      }
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
+      viewer.dispose();
+      viewerRef.current = null;
     };
   }, []);
 
-  // Load scene when it changes
+  // Update viewer size
   useEffect(() => {
-    if (rendererRef.current && scene) {
-      rendererRef.current.loadScene(scene);
+    if (!containerRef.current) return;
+    
+    const canvas = containerRef.current.querySelector('canvas');
+    if (canvas) {
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
     }
-  }, [scene]);
+  }, [width, height]);
 
-  // Animation loop
+  // Load splat file when URL changes
   useEffect(() => {
-    const render = () => {
-      if (rendererRef.current && scene) {
-        rendererRef.current.render(camera, {
-          ...DEFAULT_SETTINGS,
-          width,
-          height,
+    if (!viewerRef.current || !splatUrl) return;
+
+    const loadScene = async () => {
+      setIsLoading(true);
+      onLoadStart?.();
+
+      try {
+        // Clear existing scene
+        await viewerRef.current!.removeSplatScenes();
+
+        // Load new scene
+        await viewerRef.current!.addSplatScene(splatUrl, {
+          showLoadingUI: true,
+          progressiveLoad: true,
         });
+
+        // Get Gaussian count from the viewer
+        const count = viewerRef.current!.getSplatCount() ?? 0;
+        setGaussianCount(count);
+        
+        setIsLoading(false);
+        onLoadComplete?.(count);
+      } catch (error) {
+        setIsLoading(false);
+        onLoadError?.(error instanceof Error ? error : new Error('Failed to load splat'));
+        console.error('Error loading splat:', error);
       }
-      animationRef.current = requestAnimationFrame(render);
     };
 
-    render();
-
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [camera, scene, width, height]);
-
-  // Mouse handlers for orbit controls
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    setIsDragging(true);
-    setLastMouse({ x: e.clientX, y: e.clientY });
-  }, []);
-
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
-      if (!isDragging) return;
-
-      const dx = e.clientX - lastMouse.x;
-      const dy = e.clientY - lastMouse.y;
-
-      setOrbitAngles(prev => ({
-        theta: prev.theta + dx * 0.01,
-        phi: Math.max(0.1, Math.min(Math.PI - 0.1, prev.phi + dy * 0.01)),
-      }));
-
-      setLastMouse({ x: e.clientX, y: e.clientY });
-    },
-    [isDragging, lastMouse]
-  );
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
-
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    setZoom(prev => Math.max(0.5, Math.min(20, prev + e.deltaY * 0.01)));
-  }, []);
+    loadScene();
+  }, [splatUrl, onLoadStart, onLoadComplete, onLoadError]);
 
   return (
     <div className="gaussian-viewer">
-      <canvas
-        ref={canvasRef}
-        width={width}
-        height={height}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
+      <div
+        ref={containerRef}
         style={{
-          cursor: isDragging ? 'grabbing' : 'grab',
-          display: 'block',
+          width: `${width}px`,
+          height: `${height}px`,
+          background: '#0a0a0a',
+          borderRadius: '12px',
+          overflow: 'hidden',
         }}
       />
-      {!scene && (
+      {!splatUrl && (
         <div className="viewer-placeholder">
-          <p>Upload an image or PLY file to view</p>
+          <p>Upload a PLY file or run inference to view</p>
         </div>
       )}
-      {scene && (
+      {isLoading && (
+        <div className="viewer-loading">
+          <div className="spinner" />
+          <p>Loading Gaussians...</p>
+        </div>
+      )}
+      {splatUrl && !isLoading && gaussianCount > 0 && (
         <div className="viewer-info">
-          <span>{scene.gaussians.length.toLocaleString()} Gaussians</span>
+          <span>{gaussianCount.toLocaleString()} Gaussians</span>
         </div>
       )}
     </div>

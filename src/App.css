@@ -339,3 +339,61 @@
     height: auto !important;
   }
 }
+
+/* Image Preview */
+.image-preview {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 8px;
+  border: 1px solid #333;
+}
+
+.image-preview h4 {
+  margin: 0 0 0.5rem;
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.image-preview img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+/* Model Notice */
+.model-notice {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: rgba(255, 193, 7, 0.1);
+  border: 1px solid rgba(255, 193, 7, 0.3);
+  border-radius: 8px;
+}
+
+.model-notice h3 {
+  margin-top: 0;
+  color: #ffc107;
+}
+
+.model-notice ol {
+  padding-left: 1.5rem;
+}
+
+.model-notice code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+/* Viewer Loading */
+.viewer-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  color: #aaa;
+  gap: 1rem;
+}
