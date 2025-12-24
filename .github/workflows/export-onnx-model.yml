@@ -1,0 +1,111 @@
+name: Export ONNX Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force rebuild even if model exists'
+        required: false
+        default: 'false'
+        type: boolean
+
+# Restrict the workflow to only modify the public/models directory
+permissions:
+  contents: write
+
+jobs:
+  export-model:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Need full history to push changes
+          fetch-depth: 0
+
+      - name: Check if model already exists
+        id: check-model
+        run: |
+          if [ -f "public/models/sharp_model.onnx" ] && [ "${{ inputs.force_rebuild }}" != "true" ]; then
+            echo "Model already exists and force_rebuild is not set"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Python
+        if: steps.check-model.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyTorch and dependencies
+        if: steps.check-model.outputs.skip != 'true'
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install onnx onnxruntime onnxsim timm pillow-heif scipy click imageio matplotlib plyfile
+
+      - name: Clone ml-sharp repository
+        if: steps.check-model.outputs.skip != 'true'
+        run: |
+          git clone https://github.com/apple/ml-sharp.git /tmp/ml-sharp
+          pip install -e /tmp/ml-sharp
+
+      - name: Export model to ONNX
+        if: steps.check-model.outputs.skip != 'true'
+        run: |
+          # Create output directory
+          mkdir -p public/models
+          
+          # Run export script (downloads checkpoint automatically)
+          python scripts/export_to_onnx.py \
+            -o public/models/sharp_model.onnx \
+            --verify
+
+      - name: Verify model file
+        if: steps.check-model.outputs.skip != 'true'
+        run: |
+          if [ ! -f "public/models/sharp_model.onnx" ]; then
+            echo "Error: ONNX model was not created"
+            exit 1
+          fi
+          
+          # Print model size
+          ls -lh public/models/sharp_model.onnx
+          
+          # Get file size in bytes
+          SIZE=$(stat -c%s "public/models/sharp_model.onnx")
+          echo "Model size: $SIZE bytes"
+          
+          # Fail if model is suspiciously small (less than 1MB)
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "Error: Model file is too small, something went wrong"
+            exit 1
+          fi
+
+      - name: Commit model to repository
+        if: steps.check-model.outputs.skip != 'true'
+        run: |
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Only add the model file (restrict to public/models)
+          git add public/models/sharp_model.onnx
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: add exported ONNX model [skip ci]"
+            git push
+          fi
+
+      - name: Upload model as artifact
+        if: steps.check-model.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharp-model-onnx
+          path: public/models/sharp_model.onnx
+          retention-days: 90
