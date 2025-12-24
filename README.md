@@ -36,7 +36,16 @@ npm run dev
 
 ### Exporting the ONNX Model
 
-To enable image-to-3DGS inference, you need to export the ml-sharp model:
+There are two ways to get the ONNX model:
+
+#### Option 1: GitHub Actions (Recommended)
+
+Run the "Export ONNX Model" workflow from the Actions tab. This will:
+1. Clone and install ml-sharp
+2. Export the model to ONNX format
+3. Commit the model to `public/models/sharp_model.onnx`
+
+#### Option 2: Manual Export
 
 ```bash
 # Clone ml-sharp
@@ -60,19 +69,22 @@ The model will be downloaded automatically from Apple's servers on first export.
 ## Project Structure
 
 ```
+├── .github/
+│   └── workflows/
+│       └── export-onnx-model.yml  # ONNX export workflow
 ├── scripts/
-│   └── export_to_onnx.py    # PyTorch to ONNX export script
+│   └── export_to_onnx.py          # PyTorch to ONNX export script
 ├── src/
 │   ├── components/
-│   │   ├── GaussianViewer.tsx   # 3D viewer (GaussianSplats3D)
-│   │   ├── ImageUpload.tsx      # File upload component
-│   │   └── ProcessingStatus.tsx # Status display
+│   │   ├── GaussianViewer.tsx     # 3D viewer (GaussianSplats3D)
+│   │   ├── ImageUpload.tsx        # File upload component
+│   │   └── ProcessingStatus.tsx   # Status display
 │   ├── utils/
-│   │   ├── onnxInference.ts     # ONNX Runtime inference
-│   │   └── plyParser.ts         # PLY file parsing
-│   └── App.tsx                  # Main application
+│   │   ├── onnxInference.ts       # ONNX Runtime inference
+│   │   └── plyParser.ts           # PLY file parsing
+│   └── App.tsx                    # Main application
 ├── public/
-│   └── models/                  # Place ONNX model here
+│   └── models/                    # ONNX model location
 └── package.json
 ```
 
