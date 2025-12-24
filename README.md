@@ -2,6 +2,8 @@
 
 A web-based implementation of [Apple ML-SHARP](https://github.com/apple/ml-sharp) for generating 3D Gaussian Splatting from single images, running entirely in your browser.
 
+**🌐 [Live Demo](https://kotorik.github.io/mlsharp-web/)**
+
 ![SHARP Web](https://img.shields.io/badge/Built%20with-React%20%2B%20TypeScript-blue)
 ![Viewer](https://img.shields.io/badge/Viewer-GaussianSplats3D-green)
 ![Inference](https://img.shields.io/badge/Inference-ONNX%20Runtime%20Web-orange)
