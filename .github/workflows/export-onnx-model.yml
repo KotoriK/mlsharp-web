@@ -71,15 +71,19 @@ jobs:
             exit 1
           fi
           
-          # Print model size
-          ls -lh public/models/sharp_model.onnx
+          # Print all model files (includes external data if model > 2GB)
+          ls -lh public/models/sharp_model.onnx*
           
-          # Get file size in bytes
-          SIZE=$(stat -c%s "public/models/sharp_model.onnx")
-          echo "Model size: $SIZE bytes"
+          # Get total size of all model files
+          TOTAL_SIZE=0
+          for f in public/models/sharp_model.onnx*; do
+            SIZE=$(stat -c%s "$f")
+            TOTAL_SIZE=$((TOTAL_SIZE + SIZE))
+          done
+          echo "Total model size: $TOTAL_SIZE bytes"
           
           # Fail if model is suspiciously small (less than 1MB)
-          if [ "$SIZE" -lt 1000000 ]; then
+          if [ "$TOTAL_SIZE" -lt 1000000 ]; then
             echo "Error: Model file is too small, something went wrong"
             exit 1
           fi
@@ -91,8 +95,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Only add the model file (restrict to public/models)
+          # Only add model files (restrict to public/models)
           git add public/models/sharp_model.onnx
+          # Also add external data file if present (for models > 2GB)
+          [ -f "public/models/sharp_model.onnx.data" ] && git add public/models/sharp_model.onnx.data
           
           # Check if there are changes to commit
           if git diff --staged --quiet; then
@@ -107,5 +113,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sharp-model-onnx
-          path: public/models/sharp_model.onnx
+          path: public/models/
           retention-days: 90
