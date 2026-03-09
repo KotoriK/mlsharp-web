@@ -44,7 +44,7 @@ jobs:
         if: steps.check-model.outputs.skip != 'true'
         run: |
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install onnx onnxruntime onnxsim timm pillow-heif scipy click imageio matplotlib plyfile
+          pip install onnx onnxruntime onnxsim onnxscript timm pillow-heif scipy click imageio matplotlib plyfile
 
       - name: Clone ml-sharp repository
         if: steps.check-model.outputs.skip != 'true'
