@@ -97,17 +97,22 @@ export class SharpInference {
       enableProfiling: this.config.enableProfiling,
     };
 
-    // Probe for an external-data sidecar (.onnx.data) that accompanies
-    // models exported with save_as_external_data=True.
-    const dataUrl = this.config.modelPath + '.data';
-    try {
-      const resp = await fetch(dataUrl, { method: 'HEAD' });
-      if (resp.ok) {
-        sessionOptions.externalData = [dataUrl];
-        console.log('External model data detected:', dataUrl);
-      }
-    } catch {
-      // No external data file — single-file model
+    // Probe for an external-data sidecar that accompanies models exported
+    // with save_as_external_data=True. Two layouts are supported:
+    //   • Chunked: <model>.onnx.data.0000, .0001, … (used when the data
+    //     file exceeds the 2 GB GitHub Release upload limit)
+    //   • Single:  <model>.onnx.data
+    const baseDataUrl = this.config.modelPath + '.data';
+    const externalDataInfo = await SharpInference.fetchExternalData(baseDataUrl);
+    if (externalDataInfo.type === 'url') {
+      sessionOptions.externalData = [externalDataInfo.url];
+      console.log('External model data detected:', externalDataInfo.url);
+    } else if (externalDataInfo.type === 'buffer') {
+      // The path must match the `location` field stored inside the .onnx file.
+      const dataFileName = baseDataUrl.split('/').pop() ?? baseDataUrl;
+      sessionOptions.externalData = [{ path: dataFileName, data: externalDataInfo.data }];
+      console.log(`External model data loaded from ${externalDataInfo.parts} chunk(s), ` +
+        `total ${externalDataInfo.data.byteLength} bytes`);
     }
 
     try {
@@ -122,6 +127,66 @@ export class SharpInference {
       console.error('Failed to load ONNX model:', error);
       throw error;
     }
+  }
+
+  /**
+   * Probe for ONNX external-data files and load them.
+   *
+   * Supports two layouts produced by the export workflow:
+   *  - Chunked: `<baseDataUrl>.0000`, `.0001`, … – used when the data file
+   *    exceeds the 2 GB GitHub Releases upload limit.  All chunks are
+   *    downloaded and concatenated into a single ArrayBuffer.
+   *  - Single:  `<baseDataUrl>` – returned as a URL so ort-web can stream it
+   *    directly without buffering the whole file in JS heap.
+   *
+   * Returns `{ type: 'none' }` when no external data is present.
+   */
+  private static async fetchExternalData(baseDataUrl: string): Promise<
+    | { type: 'none' }
+    | { type: 'url'; url: string }
+    | { type: 'buffer'; data: ArrayBuffer; parts: number }
+  > {
+    // 1. Check for chunked format (.data.0000, .data.0001, …)
+    try {
+      const chunk0Url = `${baseDataUrl}.0000`;
+      const probe = await fetch(chunk0Url, { method: 'HEAD' });
+      if (probe.ok) {
+        console.log('Chunked external model data detected, downloading parts…');
+        const chunks: ArrayBuffer[] = [];
+        for (let idx = 0; ; idx++) {
+          const suffix = String(idx).padStart(4, '0');
+          const partUrl = `${baseDataUrl}.${suffix}`;
+          const partProbe = await fetch(partUrl, { method: 'HEAD' });
+          if (!partProbe.ok) break;
+          console.log(`  Downloading chunk ${idx}…`);
+          const partResp = await fetch(partUrl);
+          chunks.push(await partResp.arrayBuffer());
+        }
+        // Concatenate all parts into one contiguous ArrayBuffer.
+        const totalBytes = chunks.reduce((s, c) => s + c.byteLength, 0);
+        const merged = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const chunk of chunks) {
+          merged.set(new Uint8Array(chunk), offset);
+          offset += chunk.byteLength;
+        }
+        return { type: 'buffer', data: merged.buffer, parts: chunks.length };
+      }
+    } catch {
+      // Chunked probe failed — fall through to single-file check.
+    }
+
+    // 2. Check for single data file.
+    try {
+      const probe = await fetch(baseDataUrl, { method: 'HEAD' });
+      if (probe.ok) {
+        return { type: 'url', url: baseDataUrl };
+      }
+    } catch {
+      // No external data.
+    }
+
+    return { type: 'none' };
   }
 
   /**

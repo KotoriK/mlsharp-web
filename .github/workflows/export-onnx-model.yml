@@ -109,6 +109,9 @@ jobs:
           fi
 
           # Upload model files with retry logic (--clobber replaces existing assets)
+          # Handles both:
+          #   • split chunks: sharp_model.onnx.data.0000, .0001, …
+          #   • single file:  sharp_model.onnx.data
           UPLOAD_SUCCESS=false
           for attempt in 1 2 3; do
             echo "Upload attempt $attempt..."
@@ -120,11 +123,25 @@ jobs:
               UPLOAD_OK=false
             fi
 
-            if [ "$UPLOAD_OK" = "true" ] && [ -f "public/models/sharp_model.onnx.data" ]; then
-              if ! gh release upload "$RELEASE_TAG" \
-                public/models/sharp_model.onnx.data \
-                --clobber; then
-                UPLOAD_OK=false
+            if [ "$UPLOAD_OK" = "true" ]; then
+              # Use a glob array to safely detect split chunks without false positives.
+              PARTS=( public/models/sharp_model.onnx.data.* )
+              if [ -f "${PARTS[0]}" ]; then
+                # Upload split chunks one by one (each is ≤1.9 GB, within GitHub limit)
+                for PART in "${PARTS[@]}"; do
+                  echo "  Uploading chunk: $PART"
+                  if ! gh release upload "$RELEASE_TAG" "$PART" --clobber; then
+                    UPLOAD_OK=false
+                    break
+                  fi
+                done
+              elif [ -f "public/models/sharp_model.onnx.data" ]; then
+                # Single data file — upload directly
+                if ! gh release upload "$RELEASE_TAG" \
+                  public/models/sharp_model.onnx.data \
+                  --clobber; then
+                  UPLOAD_OK=false
+                fi
               fi
             fi
 
@@ -151,3 +168,6 @@ jobs:
           name: sharp-model-onnx
           path: public/models/
           retention-days: 90
+          # Model weights are floating-point binary data that compresses poorly.
+          # Skipping compression avoids inflated artifact sizes and speeds up upload.
+          compression-level: 0
