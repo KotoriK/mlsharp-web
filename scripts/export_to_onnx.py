@@ -245,11 +245,29 @@ def export_to_onnx(
     
     LOGGER.info(f"ONNX model saved to {output_path}")
     
-    # Verify the exported model
-    # Use file-path based check_model to avoid the 2 GB protobuf
-    # serialization limit that occurs with in-memory ModelProto objects.
-    LOGGER.info("Verifying ONNX model...")
+    # Convert to external-data format so that the .onnx protobuf stays
+    # well under the 2 GB protobuf serialisation limit.  Tensor
+    # initializers are moved into a companion .data sidecar file; the
+    # .onnx file retains only the lightweight graph structure.
     import onnx
+    
+    data_filename = output_path.name + ".data"
+    LOGGER.info("Converting model to external data format...")
+    model = onnx.load(str(output_path))
+    onnx.save_model(
+        model,
+        str(output_path),
+        save_as_external_data=True,
+        all_tensors_to_one_file=True,
+        location=data_filename,
+        size_threshold=1024,
+    )
+    del model  # free memory; save_model mutated the proto in-place
+    LOGGER.info(f"External data written to {output_path.parent / data_filename}")
+    
+    # Verify the exported model (file-path API resolves external data
+    # from the same directory automatically).
+    LOGGER.info("Verifying ONNX model...")
     onnx.checker.check_model(str(output_path))
     LOGGER.info("ONNX model verification passed!")
     
@@ -262,23 +280,21 @@ def export_to_onnx(
         else:
             try:
                 LOGGER.info("Simplifying ONNX model...")
-                # onnx.load may fail for models near the 2 GB protobuf limit;
-                # fall through to the except branch if that happens.
-                model = onnx.load(str(output_path))
-                model_simplified, check = onnxsim.simplify(model)
+                model_simplified, check = onnxsim.simplify(str(output_path))
                 if check:
-                    onnx.save(model_simplified, str(output_path))
+                    onnx.save_model(
+                        model_simplified,
+                        str(output_path),
+                        save_as_external_data=True,
+                        all_tensors_to_one_file=True,
+                        location=data_filename,
+                        size_threshold=1024,
+                    )
                     LOGGER.info("Model simplified successfully!")
                 else:
                     LOGGER.warning("Simplification check failed, keeping original model")
             except Exception as exc:
-                # onnx.load / onnx.save / onnxsim can raise EncodeError,
-                # DecodeError, RuntimeError, or MemoryError when the
-                # serialised protobuf message approaches the ~2 GB limit.
-                LOGGER.warning(
-                    "Simplification failed (model may exceed protobuf size limit): %s",
-                    exc,
-                )
+                LOGGER.warning("Simplification failed: %s", exc)
                 LOGGER.info("Keeping original (unsimplified) model")
     
     # Print model info
