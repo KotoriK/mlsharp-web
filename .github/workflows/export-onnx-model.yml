@@ -26,9 +26,14 @@ jobs:
 
       - name: Check if model already exists
         id: check-model
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -f "public/models/sharp_model.onnx" ] && [ "${{ inputs.force_rebuild }}" != "true" ]; then
-            echo "Model already exists and force_rebuild is not set"
+          if [ "${{ inputs.force_rebuild }}" = "true" ]; then
+            echo "Force rebuild requested"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          elif gh release view model-release --json assets --jq '.assets[].name' 2>/dev/null | grep -q "sharp_model.onnx"; then
+            echo "Model already exists in GitHub Release and force_rebuild is not set"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
             echo "skip=false" >> $GITHUB_OUTPUT
@@ -88,26 +93,55 @@ jobs:
             exit 1
           fi
 
-      - name: Commit model to repository
+      - name: Upload model to GitHub Release
         if: steps.check-model.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Configure git
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Only add model files (restrict to public/models)
-          git add public/models/sharp_model.onnx
-          # Also add external data file if present (for models > 2GB)
-          if [ -f "public/models/sharp_model.onnx.data" ]; then
-            git add public/models/sharp_model.onnx.data
+          RELEASE_TAG="model-release"
+
+          # Create the release if it doesn't exist yet
+          if ! gh release view "$RELEASE_TAG" &>/dev/null; then
+            gh release create "$RELEASE_TAG" \
+              --title "ML-SHARP ONNX Model" \
+              --notes "Automatically exported ONNX model files. The web application downloads these files at runtime for in-browser inference." \
+              --latest
           fi
-          
-          # Check if there are changes to commit
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "chore: add exported ONNX model [skip ci]"
-            git push
+
+          # Upload model files with retry logic (--clobber replaces existing assets)
+          UPLOAD_SUCCESS=false
+          for attempt in 1 2 3; do
+            echo "Upload attempt $attempt..."
+            UPLOAD_OK=true
+
+            if ! gh release upload "$RELEASE_TAG" \
+              public/models/sharp_model.onnx \
+              --clobber; then
+              UPLOAD_OK=false
+            fi
+
+            if [ "$UPLOAD_OK" = "true" ] && [ -f "public/models/sharp_model.onnx.data" ]; then
+              if ! gh release upload "$RELEASE_TAG" \
+                public/models/sharp_model.onnx.data \
+                --clobber; then
+                UPLOAD_OK=false
+              fi
+            fi
+
+            if [ "$UPLOAD_OK" = "true" ]; then
+              echo "Upload succeeded on attempt $attempt"
+              UPLOAD_SUCCESS=true
+              break
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "Attempt $attempt failed, retrying in 15 seconds..."
+              sleep 15
+            fi
+          done
+
+          if [ "$UPLOAD_SUCCESS" = "false" ]; then
+            echo "::warning::All GitHub Release upload attempts failed. Model will be available as workflow artifact only."
           fi
 
       - name: Upload model as artifact

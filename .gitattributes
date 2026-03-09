@@ -1,0 +1,4 @@
+# Treat ONNX model files as binary to avoid text diff overhead and
+# unintended line-ending conversions.
+*.onnx binary
+*.onnx.data binary

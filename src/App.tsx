@@ -11,8 +11,12 @@ import { SharpInference, loadImageData } from './utils/onnxInference';
 import type { ProcessingStatus } from './types';
 import './App.css';
 
-// Default model path - update this when model is available
-const DEFAULT_MODEL_PATH = '/models/sharp_model.onnx';
+// Model is distributed via GitHub Releases to support large file sizes
+// (GitHub Pages has a 100 MB per-file limit; the ONNX weights are ~2.4 GB).
+// VITE_MODEL_URL can be overridden in .env.local for local development.
+const DEFAULT_MODEL_PATH =
+  import.meta.env.VITE_MODEL_URL ||
+  'https://github.com/KotoriK/mlsharp-web/releases/latest/download/sharp_model.onnx';
 
 function App() {
   const [splatUrl, setSplatUrl] = useState<string | null>(null);
