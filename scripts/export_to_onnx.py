@@ -250,6 +250,7 @@ def export_to_onnx(
     opset_version: int = 18,
     simplify: bool = True,
     chunk_size: int = 1_900_000_000,
+    verify: bool = False,
 ) -> None:
     """
     Export ml-sharp model to ONNX format.
@@ -263,6 +264,7 @@ def export_to_onnx(
             When the ``.onnx.data`` file exceeds this limit it is split into
             numbered chunks (``.data.0000``, ``.data.0001``, …).  Set to 0 to
             disable splitting.
+        verify: Whether to test the exported model with ONNX Runtime.
     """
     if not ML_SHARP_AVAILABLE:
         raise RuntimeError(
@@ -387,6 +389,11 @@ def export_to_onnx(
     LOGGER.info("  - opacities: [B, N] - opacity values")
     LOGGER.info("  - colors: [B, N, 3] - RGB colors")
 
+    # Verify with ONNX Runtime BEFORE splitting external data, because
+    # splitting removes the original .data file that ONNX Runtime needs.
+    if verify:
+        verify_onnx_runtime(output_path)
+
     # Split the external data file into chunks when it exceeds the GitHub
     # Releases 2 GB per-file upload limit.
     data_file_path = output_path.parent / data_filename
@@ -475,11 +482,8 @@ def main():
         opset_version=args.opset,
         simplify=not args.no_simplify,
         chunk_size=args.chunk_size,
+        verify=args.verify,
     )
-    
-    # Optionally verify
-    if args.verify:
-        verify_onnx_runtime(args.output)
 
 
 if __name__ == "__main__":
