@@ -5,18 +5,15 @@
  * and viewing 3D Gaussian Splatting results.
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { ImageUpload, GaussianViewer, ProcessingStatusDisplay } from './components';
 import { SharpInference, loadImageData } from './utils/onnxInference';
 import type { ProcessingStatus } from './types';
 import './App.css';
 
-// Model is distributed via GitHub Releases to support large file sizes
-// (GitHub Pages has a 100 MB per-file limit; the ONNX weights are ~2.4 GB).
-// VITE_MODEL_URL can be overridden in .env.local for local development.
-const DEFAULT_MODEL_PATH =
-  import.meta.env.VITE_MODEL_URL ||
-  'https://github.com/KotoriK/mlsharp-web/releases/latest/download/sharp_model.onnx';
+// GitHub Releases base URL – used only to generate download links for the user.
+const RELEASES_DOWNLOAD_URL =
+  'https://github.com/KotoriK/mlsharp-web/releases/latest/download';
 
 function App() {
   const [splatUrl, setSplatUrl] = useState<string | null>(null);
@@ -25,22 +22,30 @@ function App() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState<Error | null>(null);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
-  const [modelAvailable, setModelAvailable] = useState<boolean | null>(null);
+
+  // Local model files selected by the user
+  const [modelFile, setModelFile] = useState<File | null>(null);
+  const [modelDataFile, setModelDataFile] = useState<File | null>(null);
   
   const inferenceRef = useRef<SharpInference | null>(null);
 
-  // Check if model is available on mount
-  useEffect(() => {
-    const checkModel = async () => {
-      try {
-        const response = await fetch(DEFAULT_MODEL_PATH, { method: 'HEAD' });
-        setModelAvailable(response.ok);
-      } catch {
-        setModelAvailable(false);
-      }
-    };
-    checkModel();
-  }, []);
+  /** Handle selection of local ONNX model files. */
+  const handleModelFilesSelect = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files ?? []);
+      const onnxFile = files.find((f) => f.name.endsWith('.onnx')) ?? null;
+      // Only match the single (non-chunked) external data file.
+      const dataFile = files.find((f) => /\.onnx\.data$/.test(f.name)) ?? null;
+
+      // Dispose old session when model files change
+      inferenceRef.current?.dispose();
+      inferenceRef.current = null;
+
+      setModelFile(onnxFile);
+      setModelDataFile(dataFile);
+    },
+    []
+  );
 
   const handleFileSelect = useCallback(async (file: File) => {
     setError(null);
@@ -66,26 +71,40 @@ function App() {
         setMessage('Gaussian splat loaded');
         setProgress(100);
       } else if (isImage) {
-        // Image file - run inference if model available
+        // Image file - run inference if model files are available
         setUploadedImage(URL.createObjectURL(file));
         setSplatUrl(null);
         
-        if (!modelAvailable) {
+        if (!modelFile) {
           setStatus('complete');
-          setMessage('Image loaded. ONNX model not available - see instructions below to enable inference.');
+          setMessage('Image loaded. Select the ONNX model files above to enable inference.');
           setProgress(100);
           return;
         }
         
-        // Initialize inference if needed
+        // Initialize inference session if needed
         if (!inferenceRef.current) {
           setStatus('loading');
-          setMessage('Initializing ONNX Runtime...');
+          setMessage('Reading model files...');
           setProgress(10);
+
+          const modelBuffer = await modelFile.arrayBuffer();
+          const dataBuffer = modelDataFile
+            ? await modelDataFile.arrayBuffer()
+            : undefined;
+
+          setMessage('Initializing ONNX Runtime...');
           
           inferenceRef.current = new SharpInference({
-            modelPath: DEFAULT_MODEL_PATH,
+            modelPath: modelBuffer,
             executionProvider: 'webgl',
+            // Only provide external data fields when the .data file was selected.
+            ...(dataBuffer !== undefined && {
+              externalDataBuffer: dataBuffer,
+              // Derive the path token from the .onnx filename so it matches
+              // the reference stored inside the .onnx file.
+              externalDataFileName: modelFile.name + '.data',
+            }),
           });
           await inferenceRef.current.initialize();
         }
@@ -124,7 +143,7 @@ function App() {
       setError(err instanceof Error ? err : new Error('Unknown error'));
       setMessage('Failed to process file');
     }
-  }, [modelAvailable]);
+  }, [modelFile, modelDataFile]);
 
   const handleReset = useCallback(() => {
     if (splatUrl) URL.revokeObjectURL(splatUrl);
@@ -157,6 +176,81 @@ function App() {
 
       <main className="app-main">
         <section className="upload-section">
+          {/* ── Model selection ── */}
+          <div className="model-selection">
+            <h3>🤖 ONNX Model</h3>
+            {modelFile ? (
+              <div className="model-loaded">
+                <span className="model-loaded-name">
+                  ✅ <strong>{modelFile.name}</strong>
+                  {modelDataFile && (
+                    <span className="model-data-name"> + {modelDataFile.name}</span>
+                  )}
+                </span>
+                <label className="btn btn-secondary model-change-btn">
+                  Change
+                  <input
+                    type="file"
+                    accept=".onnx,.data"
+                    multiple
+                    onChange={handleModelFilesSelect}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+              </div>
+            ) : (
+              <div className="model-notice">
+                <p>
+                  Download the model files from{' '}
+                  <a
+                    href="https://github.com/KotoriK/mlsharp-web/releases/latest"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    GitHub Releases
+                  </a>
+                  , then select them below:
+                </p>
+                <ol>
+                  <li>
+                    <a
+                      href={`${RELEASES_DOWNLOAD_URL}/sharp_model.onnx`}
+                      download
+                    >
+                      sharp_model.onnx
+                    </a>
+                  </li>
+                  <li>
+                    <a
+                      href={`${RELEASES_DOWNLOAD_URL}/sharp_model.onnx.data`}
+                      download
+                    >
+                      sharp_model.onnx.data
+                    </a>
+                  </li>
+                </ol>
+                <label className="btn btn-primary model-select-btn">
+                  Select Model Files
+                  <input
+                    type="file"
+                    accept=".onnx,.data"
+                    multiple
+                    onChange={handleModelFilesSelect}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+                <p className="model-hint">
+                  Select both <code>sharp_model.onnx</code> and{' '}
+                  <code>sharp_model.onnx.data</code> at once.
+                </p>
+                <p className="model-hint">
+                  You can still load existing PLY / splat files without the model.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* ── Image / PLY upload ── */}
           <ImageUpload
             onFileSelect={handleFileSelect}
             disabled={status === 'loading' || status === 'processing'}
@@ -242,22 +336,6 @@ function App() {
             <li><strong>Right-click + drag:</strong> Pan camera</li>
             <li><strong>Scroll:</strong> Zoom in/out</li>
           </ul>
-
-          {modelAvailable === false && (
-            <div className="model-notice">
-              <h3>⚠️ ONNX Model Required for Image Inference</h3>
-              <p>
-                To enable image-to-3DGS inference, you need to export the ml-sharp model to ONNX format:
-              </p>
-              <ol>
-                <li>Clone the <a href="https://github.com/apple/ml-sharp" target="_blank" rel="noopener noreferrer">ml-sharp repository</a></li>
-                <li>Install dependencies: <code>pip install -e . onnx onnxruntime</code></li>
-                <li>Run the export script: <code>python scripts/export_to_onnx.py -o public/models/sharp_model.onnx</code></li>
-                <li>Restart the application</li>
-              </ol>
-              <p>You can still load existing PLY/splat files without the model.</p>
-            </div>
-          )}
 
           <h3>Technical Details</h3>
           <p>
