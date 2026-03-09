@@ -105,7 +105,7 @@ def load_checkpoint(checkpoint_path: Path | None) -> dict[str, Any]:
 def export_to_onnx(
     checkpoint_path: Path | None,
     output_path: Path,
-    opset_version: int = 17,
+    opset_version: int = 18,
     simplify: bool = True,
 ) -> None:
     """
@@ -114,7 +114,7 @@ def export_to_onnx(
     Args:
         checkpoint_path: Path to .pt checkpoint file, or None to download default
         output_path: Output path for ONNX model
-        opset_version: ONNX opset version (default 17 for broad compatibility)
+        opset_version: ONNX opset version (default 18 for broad compatibility)
         simplify: Whether to simplify the ONNX model
     """
     if not ML_SHARP_AVAILABLE:
@@ -169,6 +169,7 @@ def export_to_onnx(
         input_names=input_names,
         output_names=output_names,
         dynamic_axes=dynamic_axes,
+        dynamo=False,
     )
     
     LOGGER.info(f"ONNX model saved to {output_path}")
@@ -252,8 +253,8 @@ def main():
     parser.add_argument(
         "--opset",
         type=int,
-        default=17,
-        help="ONNX opset version (default: 17)"
+        default=18,
+        help="ONNX opset version (default: 18)"
     )
     parser.add_argument(
         "--no-simplify",
