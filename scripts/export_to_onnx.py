@@ -246,11 +246,12 @@ def export_to_onnx(
     LOGGER.info(f"ONNX model saved to {output_path}")
     
     # Convert to external-data format so that the .onnx protobuf stays
-    # well under the 2 GB protobuf serialisation limit.  Tensor
+    # well under the 2 GB protobuf serialization limit.  Tensor
     # initializers are moved into a companion .data sidecar file; the
     # .onnx file retains only the lightweight graph structure.
     import onnx
     
+    # Standard ONNX naming: <model>.onnx.data (e.g. sharp_model.onnx.data)
     data_filename = output_path.name + ".data"
     LOGGER.info("Converting model to external data format...")
     model = onnx.load(str(output_path))
@@ -260,7 +261,7 @@ def export_to_onnx(
         save_as_external_data=True,
         all_tensors_to_one_file=True,
         location=data_filename,
-        size_threshold=1024,
+        size_threshold=1024,  # bytes; tensors larger than this go to the .data file
     )
     del model  # free memory; save_model mutated the proto in-place
     LOGGER.info(f"External data written to {output_path.parent / data_filename}")
