@@ -257,22 +257,29 @@ def export_to_onnx(
     if simplify:
         try:
             import onnxsim
-            LOGGER.info("Simplifying ONNX model...")
-            model = onnx.load(str(output_path))
-            model_simplified, check = onnxsim.simplify(model)
-            if check:
-                onnx.save(model_simplified, str(output_path))
-                LOGGER.info("Model simplified successfully!")
-            else:
-                LOGGER.warning("Simplification check failed, keeping original model")
         except ImportError:
             LOGGER.warning("onnxsim not installed, skipping simplification")
-        except Exception as exc:
-            LOGGER.warning(
-                "Simplification failed (model may exceed protobuf size limit): %s",
-                exc,
-            )
-            LOGGER.info("Keeping original (unsimplified) model")
+        else:
+            try:
+                LOGGER.info("Simplifying ONNX model...")
+                # onnx.load may fail for models near the 2 GB protobuf limit;
+                # fall through to the except branch if that happens.
+                model = onnx.load(str(output_path))
+                model_simplified, check = onnxsim.simplify(model)
+                if check:
+                    onnx.save(model_simplified, str(output_path))
+                    LOGGER.info("Model simplified successfully!")
+                else:
+                    LOGGER.warning("Simplification check failed, keeping original model")
+            except Exception as exc:
+                # onnx.load / onnx.save / onnxsim can raise EncodeError,
+                # DecodeError, RuntimeError, or MemoryError when the
+                # serialised protobuf message approaches the ~2 GB limit.
+                LOGGER.warning(
+                    "Simplification failed (model may exceed protobuf size limit): %s",
+                    exc,
+                )
+                LOGGER.info("Keeping original (unsimplified) model")
     
     # Print model info
     LOGGER.info("\n=== Model Info ===")

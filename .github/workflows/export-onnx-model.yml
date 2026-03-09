@@ -98,7 +98,9 @@ jobs:
           # Only add model files (restrict to public/models)
           git add public/models/sharp_model.onnx
           # Also add external data file if present (for models > 2GB)
-          [ -f "public/models/sharp_model.onnx.data" ] && git add public/models/sharp_model.onnx.data
+          if [ -f "public/models/sharp_model.onnx.data" ]; then
+            git add public/models/sharp_model.onnx.data
+          fi
           
           # Check if there are changes to commit
           if git diff --staged --quiet; then
