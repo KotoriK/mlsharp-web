@@ -68,32 +68,6 @@ jobs:
             -o public/models/sharp_model.onnx \
             --verify
 
-      - name: Split large data file
-        if: steps.check-model.outputs.skip != 'true'
-        run: |
-          # GitHub Releases has a 2 GB per-file upload limit.
-          # Split sharp_model.onnx.data into ≤1.9 GB chunks when needed so
-          # every part can be uploaded individually.  The web client detects
-          # the chunked layout (.data.0000, .data.0001, …) and reassembles
-          # the chunks in memory before passing them to onnxruntime-web.
-          CHUNK_SIZE="1900m"
-          DATA_FILE="public/models/sharp_model.onnx.data"
-          if [ -f "$DATA_FILE" ]; then
-            DATA_SIZE=$(stat -c%s "$DATA_FILE")
-            if [ "$DATA_SIZE" -gt 1900000000 ]; then
-              echo "Data file is ${DATA_SIZE} bytes — splitting into ${CHUNK_SIZE} chunks..."
-              split -b ${CHUNK_SIZE} -d --suffix-length=4 \
-                "$DATA_FILE" "${DATA_FILE}."
-              rm "$DATA_FILE"
-              echo "Split complete:"
-              ls -lh public/models/sharp_model.onnx.data.*
-            else
-              echo "Data file is ${DATA_SIZE} bytes — no split needed"
-            fi
-          else
-            echo "No external data file found"
-          fi
-
       - name: Verify model file
         if: steps.check-model.outputs.skip != 'true'
         run: |

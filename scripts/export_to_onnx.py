@@ -170,11 +170,86 @@ def load_checkpoint(checkpoint_path: Path | None) -> dict[str, Any]:
         )
 
 
+def split_external_data(
+    data_path: Path,
+    chunk_size: int = 1_900_000_000,
+) -> list[Path]:
+    """
+    Split a large ONNX external-data file into numbered chunks using Python file I/O.
+
+    The ONNX external-data format stores all tensor weights as a flat binary
+    blob.  When that blob exceeds the GitHub Releases 2 GB per-file limit we
+    split it at byte boundaries into chunks named::
+
+        <data_path>.0000
+        <data_path>.0001
+        …
+
+    The web client probes for `.data.0000` to detect the chunked layout and
+    reassembles the parts before passing the merged buffer to onnxruntime-web.
+    ONNX itself remains unaware of the split — the `.onnx` file still records
+    tensor offsets relative to the start of the original flat blob, and those
+    offsets are preserved exactly by the concatenation on the web side.
+
+    Args:
+        data_path:  Path to the ``.onnx.data`` file produced by ``onnx.save_model``.
+        chunk_size: Maximum size in bytes for each output chunk (default 1.9 GB).
+
+    Returns:
+        List of output chunk ``Path`` objects.  If the file is already within
+        ``chunk_size`` the original path is returned unchanged as a one-element
+        list and no new files are created.
+    """
+    file_size = data_path.stat().st_size
+    if chunk_size <= 0:
+        LOGGER.info("Data file splitting disabled (chunk_size=%d)", chunk_size)
+        return [data_path]
+    if file_size <= chunk_size:
+        LOGGER.info(
+            "External data file is %d bytes — no split needed", file_size,
+        )
+        return [data_path]
+
+    LOGGER.info(
+        "External data file is %d bytes (> %d) — splitting into chunks…",
+        file_size,
+        chunk_size,
+    )
+    chunk_paths: list[Path] = []
+    with data_path.open("rb") as src:
+        idx = 0
+        while True:
+            chunk_data = src.read(chunk_size)
+            if not chunk_data:
+                break
+            chunk_path = data_path.parent / f"{data_path.name}.{idx:04d}"
+            chunk_path.write_bytes(chunk_data)
+            LOGGER.info(
+                "  Wrote chunk %d: %s (%d bytes)", idx, chunk_path.name, len(chunk_data),
+            )
+            chunk_paths.append(chunk_path)
+            idx += 1
+
+    # Remove the original single-file after all chunks have been written so
+    # that a failure mid-split does not silently leave a partial state.
+    try:
+        data_path.unlink()
+    except OSError as exc:
+        raise OSError(
+            f"All {len(chunk_paths)} chunk(s) were written successfully, but removing "
+            f"the original data file '{data_path}' failed: {exc}. "
+            "Delete it manually to avoid uploading the un-split file."
+        ) from exc
+    LOGGER.info("Split complete: %d chunks", len(chunk_paths))
+    return chunk_paths
+
+
 def export_to_onnx(
     checkpoint_path: Path | None,
     output_path: Path,
     opset_version: int = 18,
     simplify: bool = True,
+    chunk_size: int = 1_900_000_000,
 ) -> None:
     """
     Export ml-sharp model to ONNX format.
@@ -184,6 +259,10 @@ def export_to_onnx(
         output_path: Output path for ONNX model
         opset_version: ONNX opset version (default 18 for broad compatibility)
         simplify: Whether to simplify the ONNX model
+        chunk_size: Maximum byte size for each external-data chunk (default 1.9 GB).
+            When the ``.onnx.data`` file exceeds this limit it is split into
+            numbered chunks (``.data.0000``, ``.data.0001``, …).  Set to 0 to
+            disable splitting.
     """
     if not ML_SHARP_AVAILABLE:
         raise RuntimeError(
@@ -308,6 +387,12 @@ def export_to_onnx(
     LOGGER.info("  - opacities: [B, N] - opacity values")
     LOGGER.info("  - colors: [B, N, 3] - RGB colors")
 
+    # Split the external data file into chunks when it exceeds the GitHub
+    # Releases 2 GB per-file upload limit.
+    data_file_path = output_path.parent / data_filename
+    if chunk_size > 0 and data_file_path.exists():
+        split_external_data(data_file_path, chunk_size=chunk_size)
+
 
 def verify_onnx_runtime(onnx_path: Path) -> None:
     """Verify the ONNX model works with ONNX Runtime."""
@@ -369,6 +454,17 @@ def main():
         action="store_true",
         help="Verify exported model with ONNX Runtime"
     )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=1_900_000_000,
+        metavar="BYTES",
+        help=(
+            "Maximum byte size for each external-data chunk (default: 1900000000 ≈ 1.9 GB). "
+            "When the .onnx.data file exceeds this limit it is split into numbered chunks "
+            "(.data.0000, .data.0001, …). Set to 0 to disable splitting."
+        ),
+    )
     
     args = parser.parse_args()
     
@@ -378,6 +474,7 @@ def main():
         output_path=args.output,
         opset_version=args.opset,
         simplify=not args.no_simplify,
+        chunk_size=args.chunk_size,
     )
     
     # Optionally verify
