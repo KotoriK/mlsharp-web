@@ -97,6 +97,19 @@ export class SharpInference {
       enableProfiling: this.config.enableProfiling,
     };
 
+    // Probe for an external-data sidecar (.onnx.data) that accompanies
+    // models exported with save_as_external_data=True.
+    const dataUrl = this.config.modelPath + '.data';
+    try {
+      const resp = await fetch(dataUrl, { method: 'HEAD' });
+      if (resp.ok) {
+        sessionOptions.externalData = [dataUrl];
+        console.log('External model data detected:', dataUrl);
+      }
+    } catch {
+      // No external data file — single-file model
+    }
+
     try {
       console.log(`Loading model from: ${this.config.modelPath}`);
       this.session = await ort.InferenceSession.create(

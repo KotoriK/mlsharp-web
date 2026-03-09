@@ -45,6 +45,74 @@ DEFAULT_MODEL_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh
 INTERNAL_SIZE = (1536, 1536)
 
 
+def patch_mlsharp_for_onnx() -> None:
+    """
+    Apply monkey-patches to ml-sharp modules for ONNX-compatible tracing.
+
+    The ONNX tracer (TorchScript-based) cannot record Python-level operations
+    as ONNX math nodes. When a tensor dimension (e.g. image width H/W) is
+    extracted as a Python scalar via int()/float(), the tracer treats all
+    downstream results as hard-coded constants, inflating the model size.
+
+    These patches keep dynamic-dimension computations in the PyTorch tensor
+    graph so they are exported as proper ONNX operators instead of constants.
+    """
+    import sharp.models.initializer as init_mod
+
+    # --- Patch _create_base_xy ---
+    # Original uses `depth.shape` values directly as Python ints in arithmetic,
+    # causing coordinate grids to be baked as large constant tensors.
+    # This version wraps width/height in scalar tensors so divisions become
+    # ONNX Div nodes instead of folded constants.
+    def _create_base_xy_patched(
+        depth: torch.Tensor, stride: int, num_layers: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        device = depth.device
+        dtype = depth.dtype
+        batch_size = depth.shape[0]
+        image_height = depth.shape[2]
+        image_width = depth.shape[3]
+
+        # Keep width/height as scalar tensors so that the division is recorded
+        # as an ONNX Div operation rather than being folded into a constant.
+        width_t = torch.tensor(image_width, dtype=dtype, device=device)
+        height_t = torch.tensor(image_height, dtype=dtype, device=device)
+
+        xx = torch.arange(0.5 * stride, image_width, stride, device=device, dtype=dtype)
+        xx = 2.0 * xx / width_t - 1.0
+
+        yy = torch.arange(0.5 * stride, image_height, stride, device=device, dtype=dtype)
+        yy = 2.0 * yy / height_t - 1.0
+
+        xx, yy = torch.meshgrid(xx, yy, indexing="xy")
+        base_x_ndc = xx[None, None, None].expand(batch_size, 1, num_layers, -1, -1)
+        base_y_ndc = yy[None, None, None].expand(batch_size, 1, num_layers, -1, -1)
+
+        return base_x_ndc, base_y_ndc
+
+    init_mod._create_base_xy = _create_base_xy_patched
+    LOGGER.info("Patched initializer._create_base_xy for ONNX tracing")
+
+    # --- Patch _create_base_scale ---
+    # Ensure disparity_scale_factor stays in the tensor graph even if the
+    # caller computed it as a Python float.
+    _orig_create_base_scale = init_mod._create_base_scale
+
+    def _create_base_scale_patched(
+        disparity: torch.Tensor, disparity_scale_factor: float,
+    ) -> torch.Tensor:
+        # Wrap the scalar in a tensor so the multiply is an ONNX Mul node.
+        if not isinstance(disparity_scale_factor, torch.Tensor):
+            disparity_scale_factor = torch.tensor(
+                disparity_scale_factor, dtype=disparity.dtype, device=disparity.device,
+            )
+        inverse_disparity = torch.ones_like(disparity) / disparity
+        return inverse_disparity * disparity_scale_factor
+
+    init_mod._create_base_scale = _create_base_scale_patched
+    LOGGER.info("Patched initializer._create_base_scale for ONNX tracing")
+
+
 class SharpONNXWrapper(nn.Module):
     """
     Wrapper module for ONNX export that handles the Gaussians3D output.
@@ -124,6 +192,9 @@ def export_to_onnx(
             "  cd ml-sharp && pip install -e ."
         )
     
+    # Apply monkey-patches for ONNX-compatible tracing before model creation
+    patch_mlsharp_for_onnx()
+    
     # Load checkpoint
     state_dict = load_checkpoint(checkpoint_path)
     
@@ -165,7 +236,7 @@ def export_to_onnx(
         str(output_path),
         export_params=True,
         opset_version=opset_version,
-        do_constant_folding=True,
+        do_constant_folding=False,
         input_names=input_names,
         output_names=output_names,
         dynamic_axes=dynamic_axes,
@@ -174,26 +245,58 @@ def export_to_onnx(
     
     LOGGER.info(f"ONNX model saved to {output_path}")
     
-    # Verify the exported model
-    LOGGER.info("Verifying ONNX model...")
+    # Convert to external-data format so that the .onnx protobuf stays
+    # well under the 2 GB protobuf serialization limit.  Tensor
+    # initializers are moved into a companion .data sidecar file; the
+    # .onnx file retains only the lightweight graph structure.
     import onnx
+    
+    # Standard ONNX naming: <model>.onnx.data (e.g. sharp_model.onnx.data)
+    data_filename = output_path.name + ".data"
+    LOGGER.info("Converting model to external data format...")
     model = onnx.load(str(output_path))
-    onnx.checker.check_model(model)
+    onnx.save_model(
+        model,
+        str(output_path),
+        save_as_external_data=True,
+        all_tensors_to_one_file=True,
+        location=data_filename,
+        size_threshold=1024,  # bytes; tensors larger than this go to the .data file
+    )
+    del model  # free memory; save_model mutated the proto in-place
+    LOGGER.info(f"External data written to {output_path.parent / data_filename}")
+    
+    # Verify the exported model (file-path API resolves external data
+    # from the same directory automatically).
+    LOGGER.info("Verifying ONNX model...")
+    onnx.checker.check_model(str(output_path))
     LOGGER.info("ONNX model verification passed!")
     
     # Optionally simplify
     if simplify:
         try:
             import onnxsim
-            LOGGER.info("Simplifying ONNX model...")
-            model_simplified, check = onnxsim.simplify(model)
-            if check:
-                onnx.save(model_simplified, str(output_path))
-                LOGGER.info("Model simplified successfully!")
-            else:
-                LOGGER.warning("Simplification check failed, keeping original model")
         except ImportError:
             LOGGER.warning("onnxsim not installed, skipping simplification")
+        else:
+            try:
+                LOGGER.info("Simplifying ONNX model...")
+                model_simplified, check = onnxsim.simplify(str(output_path))
+                if check:
+                    onnx.save_model(
+                        model_simplified,
+                        str(output_path),
+                        save_as_external_data=True,
+                        all_tensors_to_one_file=True,
+                        location=data_filename,
+                        size_threshold=1024,
+                    )
+                    LOGGER.info("Model simplified successfully!")
+                else:
+                    LOGGER.warning("Simplification check failed, keeping original model")
+            except Exception as exc:
+                LOGGER.warning("Simplification failed: %s", exc)
+                LOGGER.info("Keeping original (unsimplified) model")
     
     # Print model info
     LOGGER.info("\n=== Model Info ===")
