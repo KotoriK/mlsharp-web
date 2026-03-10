@@ -35,12 +35,24 @@ export interface GaussianOutput {
  * Configuration for the inference session
  */
 export interface InferenceConfig {
-  /** Path or URL to the ONNX model */
-  modelPath: string;
+  /** Path or URL to the ONNX model, or a pre-loaded ArrayBuffer / Uint8Array */
+  modelPath: string | ArrayBuffer | Uint8Array;
   /** Execution provider: 'webgl', 'wasm', or 'webgpu' */
   executionProvider?: 'webgl' | 'wasm' | 'webgpu';
   /** Enable profiling for debugging */
   enableProfiling?: boolean;
+  /**
+   * Pre-loaded external data buffer.
+   * When provided the network fetch of the .data sidecar is skipped entirely,
+   * which is required when the model is loaded from a local file (no URL).
+   */
+  externalDataBuffer?: ArrayBuffer;
+  /**
+   * The path token stored inside the .onnx file that refers to the external
+   * data.  Must match exactly; defaults to "sharp_model.onnx.data".
+   * Only used when externalDataBuffer is provided.
+   */
+  externalDataFileName?: string;
 }
 
 /**
@@ -97,30 +109,50 @@ export class SharpInference {
       enableProfiling: this.config.enableProfiling,
     };
 
-    // Probe for an external-data sidecar that accompanies models exported
-    // with save_as_external_data=True. Two layouts are supported:
-    //   • Chunked: <model>.onnx.data.0000, .0001, … (used when the data
-    //     file exceeds the 2 GB GitHub Release upload limit)
-    //   • Single:  <model>.onnx.data
-    const baseDataUrl = this.config.modelPath + '.data';
-    const externalDataInfo = await SharpInference.fetchExternalData(baseDataUrl);
-    if (externalDataInfo.type === 'url') {
-      sessionOptions.externalData = [externalDataInfo.url];
-      console.log('External model data detected:', externalDataInfo.url);
-    } else if (externalDataInfo.type === 'buffer') {
-      // The path must match the `location` field stored inside the .onnx file.
-      const dataFileName = baseDataUrl.split('/').pop() ?? baseDataUrl;
-      sessionOptions.externalData = [{ path: dataFileName, data: externalDataInfo.data }];
-      console.log(`External model data loaded from ${externalDataInfo.parts} chunk(s), ` +
-        `total ${externalDataInfo.data.byteLength} bytes`);
+    // Probe for / load external-data sidecar.
+    // When externalDataBuffer is provided (local file) we skip network requests.
+    // When modelPath is a URL we attempt to find the .data sidecar on the server.
+    if (this.config.externalDataBuffer !== undefined) {
+      const path = this.config.externalDataFileName ?? 'sharp_model.onnx.data';
+      sessionOptions.externalData = [{ path, data: this.config.externalDataBuffer }];
+      console.log(`External model data provided locally (${this.config.externalDataBuffer.byteLength} bytes)`);
+    } else if (typeof this.config.modelPath === 'string') {
+      // Probe for an external-data sidecar that accompanies models exported
+      // with save_as_external_data=True. Two layouts are supported:
+      //   • Chunked: <model>.onnx.data.0000, .0001, … (used when the data
+      //     file exceeds the 2 GB GitHub Release upload limit)
+      //   • Single:  <model>.onnx.data
+      const baseDataUrl = this.config.modelPath + '.data';
+      const externalDataInfo = await SharpInference.fetchExternalData(baseDataUrl);
+      if (externalDataInfo.type === 'url') {
+        sessionOptions.externalData = [externalDataInfo.url];
+        console.log('External model data detected:', externalDataInfo.url);
+      } else if (externalDataInfo.type === 'buffer') {
+        // The path must match the `location` field stored inside the .onnx file.
+        const dataFileName = baseDataUrl.split('/').pop() ?? baseDataUrl;
+        sessionOptions.externalData = [{ path: dataFileName, data: externalDataInfo.data }];
+        console.log(`External model data loaded from ${externalDataInfo.parts} chunk(s), ` +
+          `total ${externalDataInfo.data.byteLength} bytes`);
+      }
     }
+    // If modelPath is a buffer and no externalDataBuffer is provided, the model
+    // is assumed to be fully self-contained (no external data file).
 
     try {
-      console.log(`Loading model from: ${this.config.modelPath}`);
-      this.session = await ort.InferenceSession.create(
-        this.config.modelPath,
-        sessionOptions
-      );
+      if (typeof this.config.modelPath === 'string') {
+        console.log(`Loading model from: ${this.config.modelPath}`);
+      } else {
+        console.log('Loading model from local buffer...');
+      }
+      // InferenceSession.create has separate overloads for string, ArrayBuffer, and Uint8Array.
+      // Use explicit type-narrowing branches so TypeScript resolves the correct overload.
+      if (typeof this.config.modelPath === 'string') {
+        this.session = await ort.InferenceSession.create(this.config.modelPath, sessionOptions);
+      } else if (this.config.modelPath instanceof Uint8Array) {
+        this.session = await ort.InferenceSession.create(this.config.modelPath, sessionOptions);
+      } else {
+        this.session = await ort.InferenceSession.create(this.config.modelPath, sessionOptions);
+      }
       this.isInitialized = true;
       console.log('Model loaded successfully');
     } catch (error) {
