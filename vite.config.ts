@@ -6,4 +6,16 @@ export default defineConfig({
   plugins: [react()],
   // Set base path for GitHub Pages deployment
   base: '/mlsharp-web/',
+  // Prevent Vite from pre-bundling onnxruntime-web so the WASM sidecar files
+  // are not inlined or mangled – they must remain as separate URLs.
+  optimizeDeps: {
+    exclude: ['onnxruntime-web'],
+  },
+  server: {
+    headers: {
+      // Required for SharedArrayBuffer, which the multithreaded WASM backend uses.
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+  },
 })

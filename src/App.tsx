@@ -97,7 +97,7 @@ function App() {
           
           inferenceRef.current = new SharpInference({
             modelPath: modelBuffer,
-            executionProvider: 'webgl',
+            executionProvider: 'webgpu',
             // Only provide external data fields when the .data file was selected.
             ...(dataBuffer !== undefined && {
               externalDataBuffer: dataBuffer,
