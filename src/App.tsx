@@ -81,15 +81,12 @@ function App() {
 
           const modelBuffer = await modelFile.arrayBuffer();
 
-          // Read and concatenate external-data files (sorted by name so
-          // chunks are reassembled in the correct order).
+          // Read and concatenate external-data files (already sorted by
+          // OnnxModelSelect; the order is preserved in state).
           let dataBuffer: ArrayBuffer | undefined;
           if (modelDataFiles.length > 0) {
-            const sorted = [...modelDataFiles].sort((a, b) =>
-              a.name.localeCompare(b.name),
-            );
             const buffers = await Promise.all(
-              sorted.map((f) => f.arrayBuffer()),
+              modelDataFiles.map((f) => f.arrayBuffer()),
             );
             const totalSize = buffers.reduce(
               (s, b) => s + b.byteLength,

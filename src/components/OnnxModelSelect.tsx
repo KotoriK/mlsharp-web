@@ -69,7 +69,7 @@ export function OnnxModelSelect({
                 {' '}
                 + {dataFiles.length === 1
                   ? dataFiles[0].name
-                  : `${dataFiles.length} data files`}
+                  : `${dataFiles.length} data chunks`}
               </span>
             )}
           </span>

@@ -110,7 +110,7 @@ The parent component (`App.tsx`) receives the classified files via the
 
 ## 5. ONNX Runtime loading (`src/utils/onnxInference.ts`)
 
-### URL-based loading (`fetchExternalData`)
+### URL-based loading (`fetchExternalData` in `src/utils/onnxInference.ts`)
 When `modelPath` is a URL the inference engine automatically probes for
 external data:
 
