@@ -37,8 +37,8 @@ export interface GaussianOutput {
 export interface InferenceConfig {
   /** Path or URL to the ONNX model, or a pre-loaded ArrayBuffer / Uint8Array */
   modelPath: string | ArrayBuffer | Uint8Array;
-  /** Execution provider: 'webgl', 'wasm', or 'webgpu' */
-  executionProvider?: 'webgl' | 'wasm' | 'webgpu';
+  /** Execution provider: 'wasm' or 'webgpu' */
+  executionProvider?: 'wasm' | 'webgpu';
   /** Enable profiling for debugging */
   enableProfiling?: boolean;
   /**
@@ -68,7 +68,7 @@ export class SharpInference {
 
   constructor(config: InferenceConfig) {
     this.config = {
-      executionProvider: 'webgl',
+      executionProvider: 'webgpu',
       enableProfiling: false,
       ...config,
     };
@@ -88,9 +88,6 @@ export class SharpInference {
     switch (this.config.executionProvider) {
       case 'webgpu':
         executionProviders.push('webgpu');
-        break;
-      case 'webgl':
-        executionProviders.push('webgl');
         break;
       case 'wasm':
       default:
@@ -194,15 +191,11 @@ export class SharpInference {
           const partResp = await fetch(partUrl);
           chunks.push(await partResp.arrayBuffer());
         }
-        // Concatenate all parts into one contiguous ArrayBuffer.
-        const totalBytes = chunks.reduce((s, c) => s + c.byteLength, 0);
-        const merged = new Uint8Array(totalBytes);
-        let offset = 0;
-        for (const chunk of chunks) {
-          merged.set(new Uint8Array(chunk), offset);
-          offset += chunk.byteLength;
-        }
-        return { type: 'buffer', data: merged.buffer, parts: chunks.length };
+        // Concatenate all parts using Blob to avoid holding duplicate
+        // copies in memory, preventing RangeError on large data files.
+        const blob = new Blob(chunks);
+        const merged = await blob.arrayBuffer();
+        return { type: 'buffer', data: merged, parts: chunks.length };
       }
     } catch {
       // Chunked probe failed — fall through to single-file check.

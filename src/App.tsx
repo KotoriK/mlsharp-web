@@ -83,29 +83,19 @@ function App() {
 
           // Read and concatenate external-data files (already sorted by
           // OnnxModelSelect; the order is preserved in state).
+          // Use Blob to avoid holding duplicate copies in memory, which
+          // prevents RangeError on large (>1 GB) model data files.
           let dataBuffer: ArrayBuffer | undefined;
           if (modelDataFiles.length > 0) {
-            const buffers = await Promise.all(
-              modelDataFiles.map((f) => f.arrayBuffer()),
-            );
-            const totalSize = buffers.reduce(
-              (s, b) => s + b.byteLength,
-              0,
-            );
-            const merged = new Uint8Array(totalSize);
-            let offset = 0;
-            for (const buf of buffers) {
-              merged.set(new Uint8Array(buf), offset);
-              offset += buf.byteLength;
-            }
-            dataBuffer = merged.buffer;
+            const blob = new Blob(modelDataFiles);
+            dataBuffer = await blob.arrayBuffer();
           }
 
           setMessage('Initializing ONNX Runtime...');
           
           inferenceRef.current = new SharpInference({
             modelPath: modelBuffer,
-            executionProvider: 'webgl',
+            executionProvider: 'webgpu',
             // Only provide external data fields when data file(s) were selected.
             ...(dataBuffer !== undefined && {
               externalDataBuffer: dataBuffer,
