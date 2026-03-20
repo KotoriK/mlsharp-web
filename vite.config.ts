@@ -13,7 +13,10 @@ export default defineConfig({
   },
   server: {
     headers: {
-      // Required for SharedArrayBuffer, which the multithreaded WASM backend uses.
+      // Enable SharedArrayBuffer for the multithreaded WASM backend during
+      // local development.  These headers have no effect on GitHub Pages
+      // (which does not support custom HTTP headers); ORT will silently fall
+      // back to single-threaded WASM mode on the live site.
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
