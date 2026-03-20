@@ -178,40 +178,34 @@ def split_external_data(
     Split a large ONNX external-data file into numbered chunks using Python file I/O.
 
     The ONNX external-data format stores all tensor weights as a flat binary
-    blob.  When that blob exceeds the GitHub Releases 2 GB per-file limit we
-    split it at byte boundaries into chunks named::
+    blob.  This function always produces files with 4-digit suffixes::
 
         <data_path>.0000
         <data_path>.0001
         …
 
-    The web client probes for `.data.0000` to detect the chunked layout and
-    reassembles the parts before passing the merged buffer to onnxruntime-web.
-    ONNX itself remains unaware of the split — the `.onnx` file still records
-    tensor offsets relative to the start of the original flat blob, and those
-    offsets are preserved exactly by the concatenation on the web side.
+    Even when the data fits in a single chunk the output is named ``.0000``
+    so that the web client can use a single code-path (probe for ``.0000``
+    and concatenate all sequential chunks).
+
+    When ``chunk_size`` is 0 splitting is disabled entirely and the original
+    file is returned as-is.
 
     Args:
         data_path:  Path to the ``.onnx.data`` file produced by ``onnx.save_model``.
         chunk_size: Maximum size in bytes for each output chunk (default 1.9 GB).
 
     Returns:
-        List of output chunk ``Path`` objects.  If the file is already within
-        ``chunk_size`` the original path is returned unchanged as a one-element
-        list and no new files are created.
+        List of output chunk ``Path`` objects.  When ``chunk_size`` is 0 the
+        original path is returned unchanged as a one-element list.
     """
     file_size = data_path.stat().st_size
     if chunk_size <= 0:
         LOGGER.info("Data file splitting disabled (chunk_size=%d)", chunk_size)
         return [data_path]
-    if file_size <= chunk_size:
-        LOGGER.info(
-            "External data file is %d bytes — no split needed", file_size,
-        )
-        return [data_path]
 
     LOGGER.info(
-        "External data file is %d bytes (> %d) — splitting into chunks…",
+        "External data file is %d bytes — splitting into chunks (max %d bytes each)…",
         file_size,
         chunk_size,
     )

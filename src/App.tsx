@@ -6,14 +6,10 @@
  */
 
 import { useState, useCallback, useRef } from 'react';
-import { ImageUpload, GaussianViewer, ProcessingStatusDisplay } from './components';
+import { ImageUpload, GaussianViewer, ProcessingStatusDisplay, OnnxModelSelect } from './components';
 import { SharpInference, loadImageData } from './utils/onnxInference';
 import type { ProcessingStatus } from './types';
 import './App.css';
-
-// GitHub Releases base URL – used only to generate download links for the user.
-const RELEASES_DOWNLOAD_URL =
-  'https://github.com/KotoriK/mlsharp-web/releases/latest/download';
 
 function App() {
   const [splatUrl, setSplatUrl] = useState<string | null>(null);
@@ -25,24 +21,19 @@ function App() {
 
   // Local model files selected by the user
   const [modelFile, setModelFile] = useState<File | null>(null);
-  const [modelDataFile, setModelDataFile] = useState<File | null>(null);
+  const [modelDataFiles, setModelDataFiles] = useState<File[]>([]);
   
   const inferenceRef = useRef<SharpInference | null>(null);
 
   /** Handle selection of local ONNX model files. */
-  const handleModelFilesSelect = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files ?? []);
-      const onnxFile = files.find((f) => f.name.endsWith('.onnx')) ?? null;
-      // Only match the single (non-chunked) external data file.
-      const dataFile = files.find((f) => /\.onnx\.data$/.test(f.name)) ?? null;
-
+  const handleModelFilesChange = useCallback(
+    (onnxFile: File | null, dataFiles: File[]) => {
       // Dispose old session when model files change
       inferenceRef.current?.dispose();
       inferenceRef.current = null;
 
       setModelFile(onnxFile);
-      setModelDataFile(dataFile);
+      setModelDataFiles(dataFiles);
     },
     []
   );
@@ -89,16 +80,36 @@ function App() {
           setProgress(10);
 
           const modelBuffer = await modelFile.arrayBuffer();
-          const dataBuffer = modelDataFile
-            ? await modelDataFile.arrayBuffer()
-            : undefined;
+
+          // Read and concatenate external-data files (sorted by name so
+          // chunks are reassembled in the correct order).
+          let dataBuffer: ArrayBuffer | undefined;
+          if (modelDataFiles.length > 0) {
+            const sorted = [...modelDataFiles].sort((a, b) =>
+              a.name.localeCompare(b.name),
+            );
+            const buffers = await Promise.all(
+              sorted.map((f) => f.arrayBuffer()),
+            );
+            const totalSize = buffers.reduce(
+              (s, b) => s + b.byteLength,
+              0,
+            );
+            const merged = new Uint8Array(totalSize);
+            let offset = 0;
+            for (const buf of buffers) {
+              merged.set(new Uint8Array(buf), offset);
+              offset += buf.byteLength;
+            }
+            dataBuffer = merged.buffer;
+          }
 
           setMessage('Initializing ONNX Runtime...');
           
           inferenceRef.current = new SharpInference({
             modelPath: modelBuffer,
             executionProvider: 'webgl',
-            // Only provide external data fields when the .data file was selected.
+            // Only provide external data fields when data file(s) were selected.
             ...(dataBuffer !== undefined && {
               externalDataBuffer: dataBuffer,
               // Derive the path token from the .onnx filename so it matches
@@ -143,7 +154,7 @@ function App() {
       setError(err instanceof Error ? err : new Error('Unknown error'));
       setMessage('Failed to process file');
     }
-  }, [modelFile, modelDataFile]);
+  }, [modelFile, modelDataFiles]);
 
   const handleReset = useCallback(() => {
     if (splatUrl) URL.revokeObjectURL(splatUrl);
@@ -177,78 +188,11 @@ function App() {
       <main className="app-main">
         <section className="upload-section">
           {/* ── Model selection ── */}
-          <div className="model-selection">
-            <h3>🤖 ONNX Model</h3>
-            {modelFile ? (
-              <div className="model-loaded">
-                <span className="model-loaded-name">
-                  ✅ <strong>{modelFile.name}</strong>
-                  {modelDataFile && (
-                    <span className="model-data-name"> + {modelDataFile.name}</span>
-                  )}
-                </span>
-                <label className="btn btn-secondary model-change-btn">
-                  Change
-                  <input
-                    type="file"
-                    accept=".onnx,.data"
-                    multiple
-                    onChange={handleModelFilesSelect}
-                    style={{ display: 'none' }}
-                  />
-                </label>
-              </div>
-            ) : (
-              <div className="model-notice">
-                <p>
-                  Download the model files from{' '}
-                  <a
-                    href="https://github.com/KotoriK/mlsharp-web/releases/latest"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    GitHub Releases
-                  </a>
-                  , then select them below:
-                </p>
-                <ol>
-                  <li>
-                    <a
-                      href={`${RELEASES_DOWNLOAD_URL}/sharp_model.onnx`}
-                      download
-                    >
-                      sharp_model.onnx
-                    </a>
-                  </li>
-                  <li>
-                    <a
-                      href={`${RELEASES_DOWNLOAD_URL}/sharp_model.onnx.data`}
-                      download
-                    >
-                      sharp_model.onnx.data
-                    </a>
-                  </li>
-                </ol>
-                <label className="btn btn-primary model-select-btn">
-                  Select Model Files
-                  <input
-                    type="file"
-                    accept=".onnx,.data"
-                    multiple
-                    onChange={handleModelFilesSelect}
-                    style={{ display: 'none' }}
-                  />
-                </label>
-                <p className="model-hint">
-                  Select both <code>sharp_model.onnx</code> and{' '}
-                  <code>sharp_model.onnx.data</code> at once.
-                </p>
-                <p className="model-hint">
-                  You can still load existing PLY / splat files without the model.
-                </p>
-              </div>
-            )}
-          </div>
+          <OnnxModelSelect
+            modelFile={modelFile}
+            dataFiles={modelDataFiles}
+            onModelFilesChange={handleModelFilesChange}
+          />
 
           {/* ── Image / PLY upload ── */}
           <ImageUpload

@@ -76,8 +76,14 @@ jobs:
             exit 1
           fi
           
-          # Print all model files (includes external data if model > 2GB)
+          # Print all model files (includes external data chunks)
           ls -lh public/models/sharp_model.onnx*
+          
+          # Verify at least one data chunk exists (.data.0000)
+          if [ ! -f "public/models/sharp_model.onnx.data.0000" ]; then
+            echo "Error: Expected data chunk sharp_model.onnx.data.0000 not found"
+            exit 1
+          fi
           
           # Get total size of all model files
           TOTAL_SIZE=0
@@ -109,9 +115,7 @@ jobs:
           fi
 
           # Upload model files with retry logic (--clobber replaces existing assets)
-          # Handles both:
-          #   • split chunks: sharp_model.onnx.data.0000, .0001, …
-          #   • single file:  sharp_model.onnx.data
+          # Data is always in chunked format: sharp_model.onnx.data.0000, .0001, …
           UPLOAD_SUCCESS=false
           for attempt in 1 2 3; do
             echo "Upload attempt $attempt..."
@@ -124,10 +128,9 @@ jobs:
             fi
 
             if [ "$UPLOAD_OK" = "true" ]; then
-              # Use a glob array to safely detect split chunks without false positives.
+              # Upload data chunks (.data.0000, .0001, …)
               PARTS=( public/models/sharp_model.onnx.data.* )
               if [ -f "${PARTS[0]}" ]; then
-                # Upload split chunks one by one (each is ≤1.9 GB, within GitHub limit)
                 for PART in "${PARTS[@]}"; do
                   echo "  Uploading chunk: $PART"
                   if ! gh release upload "$RELEASE_TAG" "$PART" --clobber; then
@@ -135,13 +138,8 @@ jobs:
                     break
                   fi
                 done
-              elif [ -f "public/models/sharp_model.onnx.data" ]; then
-                # Single data file — upload directly
-                if ! gh release upload "$RELEASE_TAG" \
-                  public/models/sharp_model.onnx.data \
-                  --clobber; then
-                  UPLOAD_OK=false
-                fi
+              else
+                echo "Warning: No data chunks found to upload"
               fi
             fi
 
