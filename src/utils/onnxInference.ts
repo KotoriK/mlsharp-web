@@ -37,8 +37,8 @@ export interface GaussianOutput {
 export interface InferenceConfig {
   /** Path or URL to the ONNX model, or a pre-loaded ArrayBuffer / Uint8Array */
   modelPath: string | ArrayBuffer | Uint8Array;
-  /** Execution provider: 'webgl', 'wasm', or 'webgpu' */
-  executionProvider?: 'webgl' | 'wasm' | 'webgpu';
+  /** Execution provider: 'webgpu' (GPU-accelerated, preferred) or 'wasm' (CPU fallback) */
+  executionProvider?: 'wasm' | 'webgpu';
   /** Enable profiling for debugging */
   enableProfiling?: boolean;
   /**
@@ -53,6 +53,15 @@ export interface InferenceConfig {
    * Only used when externalDataBuffer is provided.
    */
   externalDataFileName?: string;
+  /**
+   * Override the directory (or named file paths) from which ONNX Runtime
+   * loads its WebAssembly binaries.  When omitted, a jsDelivr CDN URL
+   * matching the installed onnxruntime-web version is used so that the WASM
+   * and JSEP (WebGPU) binaries are always resolvable regardless of the
+   * deployment layout.  Set this to a local path (e.g. '/assets/') if you
+   * need offline support or want to self-host the binaries.
+   */
+  wasmPaths?: string;
 }
 
 /**
@@ -68,7 +77,7 @@ export class SharpInference {
 
   constructor(config: InferenceConfig) {
     this.config = {
-      executionProvider: 'webgl',
+      executionProvider: 'webgpu',
       enableProfiling: false,
       ...config,
     };
@@ -81,16 +90,24 @@ export class SharpInference {
     if (this.isInitialized) return;
 
     console.log('Initializing ONNX Runtime Web...');
-    
+
+    // Point to the CDN so the .wasm files (including the WebGPU JSEP binary)
+    // are always resolvable regardless of the deployment layout.
+    // The version fallback matches the package installed at build time;
+    // ort.env.versions.web is set by the library itself and should always
+    // be defined, but the fallback prevents a broken URL on the rare chance
+    // it is not.
+    const ortVersion = ort.env.versions.web ?? '1.23.2';
+    ort.env.wasm.wasmPaths =
+      this.config.wasmPaths ??
+      `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ortVersion}/dist/`;
+
     // Configure execution providers based on config
     const executionProviders: ort.InferenceSession.ExecutionProviderConfig[] = [];
     
     switch (this.config.executionProvider) {
       case 'webgpu':
         executionProviders.push('webgpu');
-        break;
-      case 'webgl':
-        executionProviders.push('webgl');
         break;
       case 'wasm':
       default:
